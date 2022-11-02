@@ -1,0 +1,27 @@
+description: action when instance terminate
+schemaVersion: '0.3'
+assumeRole: '{{ automationAssumeRole }}'
+parameters:
+  automationAssumeRole:
+    type: String
+    default: "${automationAssumeRole}"
+  CloudWatchLogGroupName:
+    type: String
+    default: "${CloudWatchLogGroupName}"
+  InstanceId:
+    type: String
+  LifecycleHookName:
+    type: String
+  AutoScalingGroupName:
+    type: String
+
+mainSteps:
+  - name: TerminateTheInstance
+    action: 'aws:executeAwsApi'
+    inputs:
+      LifecycleHookName: '{{ LifecycleHookName }}'
+      InstanceId: '{{ InstanceId }}'
+      AutoScalingGroupName: '{{ AutoScalingGroupName }}'
+      Service: autoscaling
+      Api: CompleteLifecycleAction
+      LifecycleActionResult: CONTINUE

@@ -1,0 +1,56 @@
+{
+  "min_packer_version": "1.4.2",
+  "builders": [
+    {
+      "name": "jenkins-ami-{{isotime \"2006-01-02_1504\"}}",
+      "ami_name": "jenkins-ami-{{isotime \"2006-01-02_1504\"}}",
+      "ami_description": "An Amazon Linux 2 AMI Image.",
+      "instance_type": "t3.micro",
+      "shutdown_behavior": "terminate",
+      "region": "us-east-1",
+      "profile": "{{user `aws_profile`}}",
+      "type": "amazon-ebs",
+      "vpc_id": "vpc-05a562e338956b6ea",
+      "subnet_id": "subnet-0e4bd5179452d3e9d",
+      "ssh_interface": "public_ip",
+      "ssh_pty": "true",
+      "force_delete_snapshot": "true",
+      "force_deregister": "true",
+      "source_ami_filter": {
+        "filters": {
+          "virtualization-type": "hvm",
+          "architecture": "x86_64",
+          "name": "amzn2-ami-hvm-*",
+          "block-device-mapping.volume-type": "gp2",
+          "root-device-type": "ebs"
+        },
+        "owners": [
+          "amazon"
+        ],
+        "most_recent": true
+      },
+      "ssh_username": "ec2-user"
+    }
+  ],
+  "provisioners": [
+    {
+      "type": "shell",
+      "inline": [
+        "sudo yum update –y",
+        "sudo yum install amazon-efs-utils -y",
+        "sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo",
+        "sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io.key",
+        "sudo amazon-linux-extras install java-openjdk11 -y",
+        "sudo yum install jenkins -y"
+      ]
+    }
+  ],
+  "post-processors": [
+    {
+      "type": "manifest",
+      "output": "manifest_basebuild-amznlinux2-{{user `aws_profile`}}-{{user `aws_region`}}-{{isotime \"2006-01-02_1504\"}}.json",
+      "strip_path": true
+    }
+  ]
+}
+

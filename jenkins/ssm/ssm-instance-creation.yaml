@@ -1,0 +1,149 @@
+description: action when instance launch
+schemaVersion: '0.3'
+assumeRole: '{{ automationAssumeRole }}'
+parameters:
+  automationAssumeRole:
+    type: String
+    default: '${automationAssumeRole}'
+  CloudWatchLogGroupName:
+    type: String
+    default: '${CloudWatchLogGroupName}'
+  MountTargetDns:
+    type: String
+    default: '${MountTargetDns}'
+  MountPoint:
+    type: String
+    default: '${MountPoint}'
+  InstanceId:
+    type: String
+  LifecycleHookName:
+    type: String
+  AutoScalingGroupName:
+    type: String
+mainSteps:
+  - name: waitUntilInstanceStateRunning
+    action: 'aws:waitForAwsResourceProperty'
+    timeoutSeconds: 100
+    inputs:
+      Service: ec2
+      Api: DescribeInstanceStatus
+      InstanceIds:
+        - '{{ InstanceId }}'
+      PropertySelector: '$.InstanceStatuses[0].InstanceState.Name'
+      DesiredValues:
+        - running
+    nextStep: WaitForSSMAgentRegistration
+  - name: WaitForSSMAgentRegistration
+    action: 'aws:waitForAwsResourceProperty'
+    timeoutSeconds: 100
+    maxAttempts: 60
+    inputs:
+      Service: ssm
+      Api: DescribeInstanceInformation
+      InstanceInformationFilterList:
+        - key: InstanceIds
+          valueSet:
+            - '{{ InstanceId }}'
+      PropertySelector: '$.InstanceInformationList[0].PingStatus'
+      DesiredValues:
+        - Online
+    nextStep: TestEFS
+  - name: TestEFS
+    action: 'aws:runCommand'
+    timeoutSeconds: 900
+    maxAttempts: 2
+    inputs:
+      DocumentName: AWS-RunShellScript
+      InstanceIds:
+        - '{{ InstanceId }}'
+      CloudWatchOutputConfig:
+        CloudWatchOutputEnabled: true
+        CloudWatchLogGroupName: '{{ CloudWatchLogGroupName }}'
+      Parameters:
+        workingDirectory: /tmp/
+        commands:
+          - |
+            NFSPORT=2049
+            file_system_id_dns={{ MountTargetDns }}
+            mountpoint={{ MountPoint }}
+            echo "Checking if EFS/NFS-Utils are installed"
+            rpm -qa | grep amazon-efs-utils &> /dev/null
+
+            if [ $? -eq 0 ]; then
+              efsversion=$(rpm -qa | grep amazon-efs-utils)
+              Result4="PASSED: $efsversion is installed on the instance"
+              echo "$Result4\n"
+            else
+              Result4="FAILED: amazon-efs-utils is NOT installed on the instance."
+              echo "$Result4\n"
+            fi
+
+            echo "Checking if Mount point provided is already mounted."
+
+            mountpoint $mountpoint &> /dev/null
+
+            exitcode=$?
+
+            if [ ''$exitcode'' -eq 0 ]; then
+              echo "Mountpoint provided is already mounted."
+              exit 1
+            fi
+
+            echo "Testing NFS connectivity to EFS DNS Name"
+
+            timeout 3 bash -c "cat < /dev/null > /dev/tcp/$file_system_id_dns/$NFSPORT"
+
+            exitcode=$?
+
+            if [ $exitcode -eq 0 ]; then
+              Result4="PASSED: Connection to file_system_id_dns:$NFSPORT is SUCCESSFUL."
+              echo "$Result4\n"
+            else
+              Result4="FAILED: Connection to file_system_id_dns:$NFSPORT is UNSUCCESSFUL. Check the security group attached to the instance and EFS. Also, check the OS level firewall configuration if any."
+              echo "$Result4\n"
+            fi
+
+    nextStep: ConfigEFS
+  - name: ConfigEFS
+    action: 'aws:runCommand'
+    timeoutSeconds: 400
+    maxAttempts: 2
+    inputs:
+      DocumentName: AWS-RunShellScript
+      InstanceIds:
+        - '{{ InstanceId }}'
+      CloudWatchOutputConfig:
+        CloudWatchOutputEnabled: true
+        CloudWatchLogGroupName: '{{ CloudWatchLogGroupName }}'
+      Parameters:
+        workingDirectory: /tmp/
+        commands:
+          - |
+            mkdir -p {{ MountPoint }}
+
+            sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev {{ MountTargetDns }}:/ {{ MountPoint }}
+
+            if [ $? -eq 0 ]; then
+              echo "Mount was SUCCESSFUL."
+              sudo mount | grep {{ MountTargetDns }}
+            fi
+
+            sudo sed -i '/JENKINS_HOME=/c\Environment="JENKINS_HOME={{ MountPoint }}"' /usr/lib/systemd/system/jenkins.service
+            sudo sed -i '/WorkingDirectory=/c\WorkingDirectory={{ MountPoint }}' /usr/lib/systemd/system/jenkins.service
+            sudo chown jenkins:jenkins {{ MountPoint }}
+            sudo mount -a
+            sudo systemctl daemon-reload
+            sudo systemctl start jenkins
+
+    isCritical: true
+    nextStep: SendHookSignal
+  - name: SendHookSignal
+    action: 'aws:executeAwsApi'
+    inputs:
+      LifecycleHookName: '{{LifecycleHookName}}'
+      InstanceId: '{{InstanceId}}'
+      AutoScalingGroupName: '{{AutoScalingGroupName}}'
+      Service: autoscaling
+      Api: CompleteLifecycleAction
+      LifecycleActionResult: CONTINUE
+    isEnd: true
