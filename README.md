@@ -20,5 +20,5 @@ cd AMI
 	packer build jenkins.json
 ```
 ### **Architecture**
-![image](doc/SCR-20221102-jwh.png)
+![image](doc/SCR-20221102-k3d.png)
 
